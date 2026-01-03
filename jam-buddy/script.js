@@ -7,6 +7,7 @@ let userNotes = []; // Stores the notes you play
 let lastNoteTime = 0;
 const INACTIVITY_THRESHOLD = 2000; // 2 seconds of silence triggers the AI
 let inactivityTimer;
+let activeNotes = new Map(); // Track active notes for sustain: { midiNum: true }
 
 // --- 2. INITIALIZATION ---
 document.getElementById('start-btn').addEventListener('click', async () => {
@@ -40,6 +41,8 @@ function createKeys() {
         div.id = `key-${MIDI_NUMS[index]}`;
         div.innerText = KEY_LETTERS[index];
         div.onmousedown = () => playNote(index);
+        div.onmouseup = () => releaseNote(index);
+        div.onmouseleave = () => releaseNote(index);
 
         // Position keys using precise pixel positions
         if (isBlack) {
@@ -52,6 +55,7 @@ function createKeys() {
 
 function setupKeyboardListener() {
     window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
 }
 
 function playNote(index, isAI = false) {
@@ -61,19 +65,30 @@ function playNote(index, isAI = false) {
     const note = NOTES[index];
     const midi = MIDI_NUMS[index];
 
-    // Play sound
-    synth.triggerAttackRelease(note, "8n");
+    // If AI is playing or this is a repeated press, use triggerAttackRelease
+    if (isAI) {
+        synth.triggerAttackRelease(note, "8n");
+    } else {
+        // For human input, use triggerAttack for sustain
+        if (!activeNotes.has(midi)) {
+            synth.triggerAttack(note);
+            activeNotes.set(midi, true);
+        }
+    }
 
     // Visual feedback
     const keyDiv = document.getElementById(`key-${midi}`);
     if (keyDiv) {
         const activeClass = isAI ? 'ai-playing' : 'active';
         keyDiv.classList.add(activeClass);
-        setTimeout(() => keyDiv.classList.remove(activeClass), 200);
+        if (isAI) {
+            setTimeout(() => keyDiv.classList.remove(activeClass), 200);
+        }
     }
 
-    // If HUMAN played this, record it and reset the AI timer
+    // If HUMAN played this, record it
     if (!isAI) {
+        // Clear the inactivity timer - user is actively playing
         clearTimeout(inactivityTimer);
 
         // Record note for Magenta (needs pitch + quantized time steps)
@@ -83,26 +98,61 @@ function playNote(index, isAI = false) {
             startTime: Tone.now(),
             endTime: Tone.now() + 0.5
         });
+    }
+}
 
-        // If user stops playing for 2s, trigger AI
+function releaseNote(index) {
+    // Prevent release while AI is thinking
+    if (isAIThinking) return;
+
+    const midi = MIDI_NUMS[index];
+    const note = NOTES[index];
+
+    if (activeNotes.has(midi)) {
+        synth.triggerRelease(note);
+        activeNotes.delete(midi);
+    }
+
+    // Remove visual feedback
+    const keyDiv = document.getElementById(`key-${midi}`);
+    if (keyDiv) {
+        keyDiv.classList.remove('active');
+    }
+
+    // If all notes are released, start the AI timer
+    if (activeNotes.size === 0) {
+        clearTimeout(inactivityTimer);
         inactivityTimer = setTimeout(triggerAIResponse, INACTIVITY_THRESHOLD);
     }
 }
 
-// Disable keyboard input while AI is playing
 function disableKeyboard() {
     window.removeEventListener('keydown', handleKeyDown);
+    window.removeEventListener('keyup', handleKeyUp);
     document.getElementById('piano-container').classList.add('disabled');
+    // Release all sustained notes
+    activeNotes.forEach((_, midi) => {
+        const note = NOTES[MIDI_NUMS.indexOf(midi)];
+        synth.triggerRelease(note);
+    });
+    activeNotes.clear();
 }
 
 function enableKeyboard() {
     window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
     document.getElementById('piano-container').classList.remove('disabled');
 }
 
 function handleKeyDown(e) {
     if (KEY_MAP[e.key] !== undefined && !e.repeat) {
         playNote(KEY_MAP[e.key]);
+    }
+}
+
+function handleKeyUp(e) {
+    if (KEY_MAP[e.key] !== undefined) {
+        releaseNote(KEY_MAP[e.key]);
     }
 }
 
