@@ -15,6 +15,7 @@
 // TODO:
 // Fix mouse drag bug where original key doesn't release visually
 // Make sure the black keys display the right color when pressed
+// Give AI the actual timing of user notes for better rhythm
 
 // Our music and audio resources
 const synth = new Tone.PolySynth(Tone.Synth).toDestination();
