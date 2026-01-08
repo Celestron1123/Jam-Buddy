@@ -1,88 +1,128 @@
+/*
+ * JAM BUDDY
+ * An interactive web app where you can play piano and have an AI
+ * respond with its own melody using Magenta.js and Tone.js.
+ *
+ * By Elijah Potter
+ * https://www.elijahpotter.com
+*/
+
 // IDEAS:
 // Change instrument type
 // Switch between melody and chord models
+// Adjust AI creativity (temperature)
 
-// --- 1. SETUP ---
+// TODO:
+// Fix mouse drag bug where original key doesn't release visually
+// Make sure the black keys display the right color when pressed
+
+// Our music and audio resources
 const synth = new Tone.PolySynth(Tone.Synth).toDestination();
 // Using MusicRNN - melody model
 const model = new mm.MusicRNN('https://storage.googleapis.com/magentadata/js/checkpoints/music_rnn/melody_rnn');
-const statusEl = document.getElementById('status');
-const aiToggle = document.getElementById('ai-toggle');
-const stageEl = document.getElementById('stage');
-const aiLed = document.getElementById('ai-led');
-const aiKnob = document.getElementById('ai-knob');
-const aiDial = document.getElementById('ai-dial');
-let aiEnabled = true;
-let isAIThinking = false;
-let userNotes = []; // Stores the notes you play
-let lastNoteTime = 0;
-const INACTIVITY_THRESHOLD = 2000; // 2 seconds of silence triggers the AI
-let inactivityTimer;
-let activeNotes = new Map(); // Track active notes for sustain: { midiNum: true }
-let visualTimeouts = new Map(); // Track visual feedback timeouts per key
 
+// Main text element
+const statusEl = document.getElementById('status');
+// Main toggle that enables/disables AI responses
+const aiToggle = document.getElementById('ai-toggle');
+// Stage element that holds the piano and AI dial
+const stageEl = document.getElementById('stage');
+// LED for AI toggle status
+const aiLed = document.getElementById('ai-led');
+// Visual knob for AI status
+const aiKnob = document.getElementById('ai-knob');
+// Interactive dial to toggle AI
+const aiDial = document.getElementById('ai-dial');
+// Determines if AI responses are enabled
+let aiEnabled = true;
+// Tracks if AI is currently generating a response
+let isAIPlaying = false;
+// Array of notes played by the user
+let userNotes = [];
+// Timestamp of the last note played by the user
+let lastNoteTime = 0;
+// Time (in ms) of inactivity before triggering AI response
+const INACTIVITY_THRESHOLD = 2000; // 2 seconds
+// Timer for inactivity
+let inactivityTimer;
+// Tracks active notes for sustain: { midiNum: true }
+let activeNotes = new Map();
+// Tracks visual feedback timeouts per key
+let visualTimeouts = new Map();
+// Tracks the last key pressed
+let lastKeyPressed = null;
+
+// Changes the status text to whatever is passed in
 function setStatus(text) {
     statusEl.innerText = text;
 }
 
+// Updates the AI dial UI based on aiEnabled state
 function refreshAIDialUI() {
-    if (aiLed) {
-        aiLed.classList.remove('on', 'off');
-        aiLed.classList.add(aiEnabled ? 'on' : 'off');
-    }
-    if (aiKnob) {
-        aiKnob.style.transform = aiEnabled ? 'rotate(35deg)' : 'rotate(-35deg)';
-    }
+    // Reset aiLed and set based on aiEnabled
+    aiLed.classList.remove('on', 'off');
+    aiLed.classList.add(aiEnabled ? 'on' : 'off');
+
+    // Rotate knob based on aiEnabled
+    aiKnob.style.transform = aiEnabled ? 'rotate(35deg)' : 'rotate(-35deg)';
+
 }
 
-// --- 2. INITIALIZATION ---
+// Initial setup when Start button is clicked
 document.getElementById('start-btn').addEventListener('click', async () => {
+    // Start the Tone.js audio context
     await Tone.start();
     setStatus("Loading AI Model... (this takes a few seconds)");
 
     // Initialize the AI Model
     await model.initialize();
 
-    setStatus(aiEnabled ? "System Ready! Play a melody then wait for the AI to respond." : "AI is OFF. Play freely—no AI replies.");
+    // Update status and hide start button
+    setStatus("System Ready! Play a melody then wait for the AI to respond.");
     document.getElementById('start-btn').style.display = 'none';
+
+    // Show the stage
     if (stageEl) stageEl.style.display = 'flex';
+
+    // Setup the rest of the UI
     refreshAIDialUI();
     createKeys();
     setupKeyboardListener();
 });
 
 // AI toggle listener to enable/disable responses
-aiEnabled = aiToggle ? aiToggle.checked : true;
-if (aiToggle) {
-    aiToggle.addEventListener('change', () => {
-        aiEnabled = aiToggle.checked;
-        if (!aiEnabled) {
+aiToggle.addEventListener('change', () => {
+    aiEnabled = aiToggle.checked;
+    // if disabling AI, clear timers and update status
+    if (!aiEnabled) {
+        clearTimeout(inactivityTimer);
+        // Display correct status based on whether AI is working
+        setStatus(isAIPlaying ? "AI will finish this reply, then stay OFF." : "AI is OFF. Play freely");
+    } else {
+        // If enabling AI, reset user notes and status
+        userNotes = [];
+        setStatus("AI is ON. Play a melody then wait for the AI to respond.");
+        // If no active notes, start inactivity timer
+        if (activeNotes.size === 0 && userNotes.length > 0) {
+            // First, clear any existing timer
             clearTimeout(inactivityTimer);
-            setStatus(isAIThinking ? "AI will finish this reply, then stay OFF." : "AI is OFF. Play freely—no AI replies.");
-            if (!isAIThinking) enableKeyboard();
-        } else {
-            // When turning AI ON, discard any notes played while AI was OFF
-            userNotes = [];
-            setStatus("AI is ON. Play a melody then wait for the AI to respond.");
-            if (activeNotes.size === 0 && userNotes.length > 0) {
-                clearTimeout(inactivityTimer);
-                inactivityTimer = setTimeout(triggerAIResponse, INACTIVITY_THRESHOLD);
-            }
+            // This will trigger AI after threshold
+            inactivityTimer = setTimeout(triggerAIResponse, INACTIVITY_THRESHOLD);
         }
-        refreshAIDialUI();
-    });
-}
+    }
+    // Refresh the dial UI
+    refreshAIDialUI();
+});
 
 // Click the dial to toggle AI
-if (aiDial) {
-    aiDial.addEventListener('click', () => {
-        if (!stageEl || stageEl.style.display === 'none') return; // only after start
-        aiToggle.checked = !aiToggle.checked;
-        aiToggle.dispatchEvent(new Event('change'));
-    });
-}
+aiDial.addEventListener('click', () => {
+    if (stageEl.style.display === 'none') return; // only after start
+    aiToggle.checked = !aiToggle.checked;
+    aiToggle.dispatchEvent(new Event('change'));
+});
 
-// --- 3. PIANO LOGIC ---
+
+// Main keyboard and note handling logic
 const NOTES = ['C4', 'C#4', 'D4', 'D#4', 'E4', 'F4', 'F#4', 'G4', 'G#4', 'A4', 'A#4', 'B4', 'C5', 'C#5', 'D5', 'D#5', 'E5', 'F5'];
 const MIDI_NUMS = [60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77];
 const KEY_MAP = { 'a': 0, 'w': 1, 's': 2, 'e': 3, 'd': 4, 'f': 5, 't': 6, 'g': 7, 'y': 8, 'h': 9, 'u': 10, 'j': 11, 'k': 12, 'o': 13, 'l': 14, 'p': 15, ';': 16, "'": 17 };
@@ -90,35 +130,67 @@ const KEY_LETTERS = ['A', 'W', 'S', 'E', 'D', 'F', 'T', 'G', 'Y', 'H', 'U', 'J',
 const IS_BLACK_KEY = [false, true, false, true, false, false, true, false, true, false, true, false, false, true, false, true, false, false];
 const KEY_POSITIONS = [0, 40, 60, 100, 120, 180, 220, 240, 280, 300, 340, 360, 420, 460, 480, 520, 540, 600];
 
+// Create piano keys in the DOM
 function createKeys() {
     const container = document.getElementById('piano-container');
+    // Iterate through notes to create keys
     NOTES.forEach((note, index) => {
+        // Creating a div for each key. Automatically assigns class and id
         const div = document.createElement('div');
         const isBlack = IS_BLACK_KEY[index];
         div.className = `key ${isBlack ? 'black' : 'white'}`;
         div.id = `key-${MIDI_NUMS[index]}`;
         div.innerText = KEY_LETTERS[index];
-        div.onmousedown = () => playNote(index);
-        div.onmouseup = () => releaseNote(index);
-        div.onmouseleave = () => releaseNote(index);
+
+        // When a key is pressed, play the note and track lastKeyPressed
+        div.onpointerdown = (e) => {
+            lastKeyPressed = index;
+            playNote(index);
+        };
+
+        // When pointer enters a key while pressed, play that note and release lastKeyPressed
+        div.onpointerenter = (e) => {
+            // Only trigger if a button is pressed
+            if (!e.buttons) return;
+            releaseNote(lastKeyPressed);
+            lastKeyPressed = index;
+            playNote(index);
+        };
+
+        // When pointer is released, release the note
+        div.onpointerup = (e) => {
+            releaseNote(index);
+            lastKeyPressed = null;
+        };
 
         // Position keys using precise pixel positions
         if (isBlack) {
             div.style.left = `${KEY_POSITIONS[index]}px`;
         }
 
+        // Append the key to the container
         container.appendChild(div);
     });
 }
 
+// Global pointerup listener to handle releases outside keys
+window.addEventListener('pointerup', () => {
+    if (lastKeyPressed !== null) {
+        releaseNote(lastKeyPressed);
+        lastKeyPressed = null;
+    }
+});
+
+// Setup keyboard event listeners for playing notes
 function setupKeyboardListener() {
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
 }
 
+// Handle playing a note
 function playNote(index, isAI = false) {
     // Prevent human input while AI is thinking
-    if (!isAI && isAIThinking) return;
+    if (!isAI && isAIPlaying) return;
 
     const note = NOTES[index];
     const midi = MIDI_NUMS[index];
@@ -139,6 +211,7 @@ function playNote(index, isAI = false) {
     if (keyDiv) {
         const activeClass = isAI ? 'ai-playing' : 'active';
         keyDiv.classList.add(activeClass);
+        // If AI, remove the class after a short delay
         if (isAI) {
             setTimeout(() => keyDiv.classList.remove(activeClass), 200);
         }
@@ -190,13 +263,15 @@ function playNoteWithDuration(index, durationSec) {
     }
 }
 
+// Handle releasing a note
 function releaseNote(index) {
     // Prevent release while AI is thinking
-    if (isAIThinking) return;
+    if (isAIPlaying) return;
 
     const midi = MIDI_NUMS[index];
     const note = NOTES[index];
 
+    // Only release if the note is active
     if (activeNotes.has(midi)) {
         synth.triggerRelease(note);
         activeNotes.delete(midi);
@@ -215,6 +290,7 @@ function releaseNote(index) {
     }
 }
 
+// Disable keyboard input (used during AI playback)
 function disableKeyboard() {
     window.removeEventListener('keydown', handleKeyDown);
     window.removeEventListener('keyup', handleKeyUp);
@@ -227,12 +303,14 @@ function disableKeyboard() {
     activeNotes.clear();
 }
 
+// Enable keyboard input
 function enableKeyboard() {
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     document.getElementById('piano-container').classList.remove('disabled');
 }
 
+// Keyboard event handlers
 function handleKeyDown(e) {
     if (KEY_MAP[e.key] !== undefined && !e.repeat) {
         playNote(KEY_MAP[e.key]);
@@ -245,10 +323,10 @@ function handleKeyUp(e) {
     }
 }
 
-// --- 4. THE AI BRAIN ---
+// Trigger the AI to respond based on user notes
 async function triggerAIResponse() {
-    if (!aiEnabled || userNotes.length === 0 || isAIThinking) return;
-    isAIThinking = true;
+    if (!aiEnabled || userNotes.length === 0 || isAIPlaying) return;
+    isAIPlaying = true;
     disableKeyboard(); // Disable keyboard
     setStatus("AI is listening and jamming back...");
 
@@ -301,14 +379,14 @@ async function triggerAIResponse() {
         // Reset after playing (add buffer for last note to finish)
         setTimeout(() => {
             userNotes = [];
-            isAIThinking = false;
+            isAIPlaying = false;
             enableKeyboard(); // Enable keyboard
             setStatus(aiEnabled ? "Your turn! Play something." : "AI is OFF. Play freely—no AI replies.");
         }, totalDuration + 500);
 
     } catch (e) {
         console.error("AI Error:", e);
-        isAIThinking = false;
+        isAIPlaying = false;
         userNotes = [];
         enableKeyboard(); // Enable keyboard
         setStatus("AI encountered an error. Try again!");
