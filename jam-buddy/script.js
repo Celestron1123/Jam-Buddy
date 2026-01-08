@@ -1,28 +1,86 @@
+// IDEAS:
+// Change instrument type
+// Switch between melody and chord models
+
 // --- 1. SETUP ---
 const synth = new Tone.PolySynth(Tone.Synth).toDestination();
 // Using MusicRNN - melody model
 const model = new mm.MusicRNN('https://storage.googleapis.com/magentadata/js/checkpoints/music_rnn/melody_rnn');
+const statusEl = document.getElementById('status');
+const aiToggle = document.getElementById('ai-toggle');
+const stageEl = document.getElementById('stage');
+const aiLed = document.getElementById('ai-led');
+const aiKnob = document.getElementById('ai-knob');
+const aiDial = document.getElementById('ai-dial');
+let aiEnabled = true;
 let isAIThinking = false;
 let userNotes = []; // Stores the notes you play
 let lastNoteTime = 0;
 const INACTIVITY_THRESHOLD = 2000; // 2 seconds of silence triggers the AI
 let inactivityTimer;
 let activeNotes = new Map(); // Track active notes for sustain: { midiNum: true }
+let visualTimeouts = new Map(); // Track visual feedback timeouts per key
+
+function setStatus(text) {
+    statusEl.innerText = text;
+}
+
+function refreshAIDialUI() {
+    if (aiLed) {
+        aiLed.classList.remove('on', 'off');
+        aiLed.classList.add(aiEnabled ? 'on' : 'off');
+    }
+    if (aiKnob) {
+        aiKnob.style.transform = aiEnabled ? 'rotate(35deg)' : 'rotate(-35deg)';
+    }
+}
 
 // --- 2. INITIALIZATION ---
 document.getElementById('start-btn').addEventListener('click', async () => {
     await Tone.start();
-    document.getElementById('status').innerText = "Loading AI Model... (this takes a few seconds)";
+    setStatus("Loading AI Model... (this takes a few seconds)");
 
     // Initialize the AI Model
     await model.initialize();
 
-    document.getElementById('status').innerText = "System Ready! Play a melody then wait for the AI to respond.";
+    setStatus(aiEnabled ? "System Ready! Play a melody then wait for the AI to respond." : "AI is OFF. Play freely—no AI replies.");
     document.getElementById('start-btn').style.display = 'none';
-    document.getElementById('piano-container').style.display = 'flex';
+    if (stageEl) stageEl.style.display = 'flex';
+    refreshAIDialUI();
     createKeys();
     setupKeyboardListener();
 });
+
+// AI toggle listener to enable/disable responses
+aiEnabled = aiToggle ? aiToggle.checked : true;
+if (aiToggle) {
+    aiToggle.addEventListener('change', () => {
+        aiEnabled = aiToggle.checked;
+        if (!aiEnabled) {
+            clearTimeout(inactivityTimer);
+            setStatus(isAIThinking ? "AI will finish this reply, then stay OFF." : "AI is OFF. Play freely—no AI replies.");
+            if (!isAIThinking) enableKeyboard();
+        } else {
+            // When turning AI ON, discard any notes played while AI was OFF
+            userNotes = [];
+            setStatus("AI is ON. Play a melody then wait for the AI to respond.");
+            if (activeNotes.size === 0 && userNotes.length > 0) {
+                clearTimeout(inactivityTimer);
+                inactivityTimer = setTimeout(triggerAIResponse, INACTIVITY_THRESHOLD);
+            }
+        }
+        refreshAIDialUI();
+    });
+}
+
+// Click the dial to toggle AI
+if (aiDial) {
+    aiDial.addEventListener('click', () => {
+        if (!stageEl || stageEl.style.display === 'none') return; // only after start
+        aiToggle.checked = !aiToggle.checked;
+        aiToggle.dispatchEvent(new Event('change'));
+    });
+}
 
 // --- 3. PIANO LOGIC ---
 const NOTES = ['C4', 'C#4', 'D4', 'D#4', 'E4', 'F4', 'F#4', 'G4', 'G#4', 'A4', 'A#4', 'B4', 'C5', 'C#5', 'D5', 'D#5', 'E5', 'F5'];
@@ -101,6 +159,37 @@ function playNote(index, isAI = false) {
     }
 }
 
+// Play a note with a specific duration (for AI responses with rhythm)
+function playNoteWithDuration(index, durationSec) {
+    const note = NOTES[index];
+    const midi = MIDI_NUMS[index];
+
+    // Use triggerAttackRelease with the exact duration
+    synth.triggerAttackRelease(note, durationSec);
+
+    // Visual feedback - highlight key for the duration of the note
+    const keyDiv = document.getElementById(`key-${midi}`);
+    if (keyDiv) {
+        // Clear any existing timeout for this key to prevent conflicts
+        if (visualTimeouts.has(midi)) {
+            clearTimeout(visualTimeouts.get(midi));
+        }
+
+        // Remove and re-add the class to restart the visual effect for repeated notes
+        keyDiv.classList.remove('ai-playing');
+        // Trigger a reflow to ensure the class removal is processed before re-adding
+        void keyDiv.offsetWidth;
+        keyDiv.classList.add('ai-playing');
+
+        // Store the timeout so we can clear it if the same note plays again
+        const timeoutId = setTimeout(() => {
+            keyDiv.classList.remove('ai-playing');
+            visualTimeouts.delete(midi);
+        }, durationSec * 1000);
+        visualTimeouts.set(midi, timeoutId);
+    }
+}
+
 function releaseNote(index) {
     // Prevent release while AI is thinking
     if (isAIThinking) return;
@@ -120,7 +209,7 @@ function releaseNote(index) {
     }
 
     // If all notes are released, start the AI timer
-    if (activeNotes.size === 0) {
+    if (activeNotes.size === 0 && aiEnabled) {
         clearTimeout(inactivityTimer);
         inactivityTimer = setTimeout(triggerAIResponse, INACTIVITY_THRESHOLD);
     }
@@ -158,10 +247,10 @@ function handleKeyUp(e) {
 
 // --- 4. THE AI BRAIN ---
 async function triggerAIResponse() {
-    if (userNotes.length === 0 || isAIThinking) return;
+    if (!aiEnabled || userNotes.length === 0 || isAIThinking) return;
     isAIThinking = true;
     disableKeyboard(); // Disable keyboard
-    document.getElementById('status').innerText = "AI is listening and jamming back...";
+    setStatus("AI is listening and jamming back...");
 
     // 1. Convert user notes to a NoteSequence (Magenta's format)
     const unquantizedSequence = {
@@ -181,30 +270,47 @@ async function triggerAIResponse() {
         // 2. Ask AI to continue the sequence
         const result = await model.continueSequence(quantizedSequence, 50, 1.1);
 
-        // 3. Play back the AI's jazz solo
-        result.notes.forEach((note, i) => {
+        // 3. Play back the AI's response with proper rhythm
+        // Convert quantized steps to time (4 steps per quarter note at 120 BPM = ~125ms per step)
+        const msPerStep = 125; // milliseconds per quantized step
+        let totalDuration = 0;
+
+        result.notes.forEach((note) => {
+            // Calculate start time and duration from the quantized note
+            const startTimeMs = note.quantizedStartStep * msPerStep;
+            const endTimeMs = note.quantizedEndStep * msPerStep;
+            const durationMs = endTimeMs - startTimeMs;
+
+            // Convert duration to Tone.js notation for proper note length
+            const durationSec = durationMs / 1000;
+
             setTimeout(() => {
                 const closestMidi = MIDI_NUMS.reduce((prev, curr) =>
                     Math.abs(curr - note.pitch) < Math.abs(prev - note.pitch) ? curr : prev
                 );
                 const index = MIDI_NUMS.indexOf(closestMidi);
-                if (index !== -1) playNote(index, true);
-            }, i * 300);
+                if (index !== -1) playNoteWithDuration(index, durationSec);
+            }, startTimeMs);
+
+            // Track total duration for reset timing
+            if (endTimeMs > totalDuration) {
+                totalDuration = endTimeMs;
+            }
         });
 
-        // Reset after playing
+        // Reset after playing (add buffer for last note to finish)
         setTimeout(() => {
             userNotes = [];
             isAIThinking = false;
             enableKeyboard(); // Enable keyboard
-            document.getElementById('status').innerText = "Your turn! Play something.";
-        }, result.notes.length * 300);
+            setStatus(aiEnabled ? "Your turn! Play something." : "AI is OFF. Play freely—no AI replies.");
+        }, totalDuration + 500);
 
     } catch (e) {
         console.error("AI Error:", e);
         isAIThinking = false;
         userNotes = [];
         enableKeyboard(); // Enable keyboard
-        document.getElementById('status').innerText = "AI encountered an error. Try again!";
+        setStatus("AI encountered an error. Try again!");
     }
 }

@@ -14,7 +14,17 @@
     <div id="status">Click "Start Audio" to begin...</div>
     <button id="start-btn">Start Audio Engine</button>
 
-    <div class="piano" id="piano-container" style="display:none;">
+    <div id="stage" class="stage" style="display:none;">
+        <div class="left-controls" id="left-controls">
+            <div class="led off" id="ai-led" aria-label="AI status LED"></div>
+            <div class="dial" id="ai-dial" aria-label="AI On/Off dial">
+                <input type="checkbox" id="ai-toggle" hidden checked>
+                <div class="knob" id="ai-knob"></div>
+                <div class="dial-label">AI Jam Buddy</div>
+            </div>
+        </div>
+        <div class="piano" id="piano-container">
+        </div>
     </div>
 
     <script src="script.js"></script>
