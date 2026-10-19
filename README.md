@@ -87,6 +87,7 @@ There is no bundler, package manager, backend, database, or server-side API in t
     ├── index.html         Page structure and CDN dependency imports
     ├── script.js          Piano creation, audio, input, AI, and playback logic
     └── styles.css         Interface styling and piano-key animations
+
 ```
 
 ## Running locally
@@ -98,12 +99,14 @@ Because this is a static browser application, no build step is required.
 
 ```bash
 python3 -m http.server 8000
+
 ```
 
 3. Open the application at:
 
 ```text
 http://localhost:8000/jam-buddy/
+
 ```
 
 4. Click **Start Audio Engine**, wait for the model to initialize, and play a melody.
@@ -125,14 +128,14 @@ When AI mode is enabled, stop playing for approximately two seconds to trigger a
 
 The repository already identifies several natural next steps:
 
-- Preserve the exact timing of user notes so generated rhythm reflects the player's performance.
-- Improve pointer-drag release behavior when moving between keys.
-- Ensure black-key pressed-state styling is consistent across pointer and keyboard input.
-- Support selectable instruments instead of a single `Tone.Synth` sound.
-- Add chord-generation or accompaniment models alongside the current melody model.
-- Expose creativity/temperature controls to let the player influence AI variation.
-- Consider more robust scheduling and cancellation for generated playback.
+* Preserve the exact timing of user notes so generated rhythm reflects the player's performance.
+* Improve pointer-drag release behavior when moving between keys.
+* Ensure black-key pressed-state styling is consistent across pointer and keyboard input.
+* Support selectable instruments instead of a single `Tone.Synth` sound.
+* Add chord-generation or accompaniment models alongside the current melody model.
+* Expose creativity/temperature controls to let the player influence AI variation.
+* Consider more robust scheduling and cancellation for generated playback.
 
 ## License
 
-Jam Buddy is released under the [MIT License](LICENSE).
+TBD
