@@ -138,4 +138,4 @@ The repository already identifies several natural next steps:
 
 ## License
 
-TBD
+Jam Buddy is released under the GNU GPLv3 License.
